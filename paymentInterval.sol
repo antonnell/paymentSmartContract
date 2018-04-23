@@ -1,4 +1,4 @@
-pragma solidity 0.4.21;
+pragma solidity 0.4.22;
 import "./SafeMath.sol";
 
 
@@ -21,15 +21,23 @@ contract PaymentIntervalContract {
 
     enum ContractStages { Created, InProgress, Terminated }
 
-    mapping(address => mapping(address => bool)) private usufructAuthorised;
+    struct Authorisation {
+        bool payerAuthorised;
+        bool payeeAuthorised;
+        address toAddress;
+    }
+
+    Authorisation private payerUpdateAuthorised;
+    Authorisation private payerRemoveAuthorised;
+    Authorisation private payeeUpdateAuthorised;
+    Authorisation private payeeRemoveAuthorised;
+    Authorisation private usufructUpdateAuthorised;
+    Authorisation private usufructRemoveAuthorised;
+
     mapping(address => bool) private startContractAuthorised;
     mapping(address => bool) private terminateContractAuthorised;
-    mapping(address => mapping(address => bool)) private payerUpdateAuthorised;
-    mapping(address => mapping(address => bool)) private payerRemoveAuthorised;
-    mapping(address => mapping(address => bool)) private payeeUpdateAuthorised;
-    mapping(address => mapping(address => bool)) private payeeRemoveAuthorised;
-    mapping(address => mapping(address => bool)) private usufructUpdateAuthorised;
-    mapping(address => mapping(address => bool)) private usufructRemoveAuthorised;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
 
     event ContractCreated();
     event ContractStartRequested();
@@ -133,6 +141,21 @@ contract PaymentIntervalContract {
         revert();
     }
 
+    /// get contract address details
+    function getContractDetails() public view returns
+    (
+        address _payerAddress,
+        address _payeeAddress,
+        address _usufructAddress
+    )
+    {
+        _payerAddress = payerAddress;
+        _payeeAddress = payeeAddress;
+        _usufructAddress = usufructAddress;
+
+        return (_payerAddress, _payeeAddress, _usufructAddress);
+    }
+
     /**
      * Deposit funds into the contract by the payer
      *
@@ -226,6 +249,7 @@ contract PaymentIntervalContract {
         startContractAuthorised[msg.sender] = true;
         if (startContractAuthorised[payerAddress] && startContractAuthorised[payeeAddress]) {
             contractStartTime = _getBlockTime();
+            payeeWithdrawTime = contractStartTime;
             currentStage = ContractStages.InProgress;
             emit ContractStarted();
         } else {
@@ -285,11 +309,23 @@ contract PaymentIntervalContract {
 
     /// Removes the payer
     function removePayer(address _address) public payerOrPayee returns (bool) {
-        payerRemoveAuthorised[_address][msg.sender] = true;
-        if (payerRemoveAuthorised[_address][payerAddress] && payerRemoveAuthorised[_address][payeeAddress]) {
-            payerAddress = address(0);
-            emit PayerRemoveAuthorised(_address);
+        if (payerRemoveAuthorised.toAddress == _address) {
+            if (msg.sender == payerAddress) {
+                payerRemoveAuthorised.payerAuthorised = true;
+            }
+            if (msg.sender == payeeAddress) {
+                payerRemoveAuthorised.payeeAuthorised = true;
+            }
+
+            if (payerRemoveAuthorised.payerAuthorised == true && payerRemoveAuthorised.payeeAuthorised == true) {
+                payerAddress = address(0);
+                emit PayerRemoveAuthorised(_address);
+            }
         } else {
+            bool payerAuthorised = msg.sender == payerAddress;
+            bool payeeAuthorised = msg.sender == payeeAddress;
+            payerRemoveAuthorised = Authorisation(payerAuthorised, payeeAuthorised, _address);
+
             emit PayerRemoveRequested(_address);
         }
 
@@ -302,15 +338,36 @@ contract PaymentIntervalContract {
      * @param _address Address of the new Payer
      */
     function requestPayerUpdate(address _address) public payerOrPayee returns (bool) {
-        payerUpdateAuthorised[_address][msg.sender] = true;
-        if (payerUpdateAuthorised[_address][payerAddress] && payerUpdateAuthorised[_address][payeeAddress]) {
-            payerAddress = _address;
-            emit PayerUpdateAuthorised(_address);
+        if (payerUpdateAuthorised.toAddress == _address) {
+            if (msg.sender == payerAddress) {
+                payerUpdateAuthorised.payerAuthorised = true;
+            }
+            if (msg.sender == payeeAddress) {
+                payerUpdateAuthorised.payeeAuthorised = true;
+            }
+
+            if (payerUpdateAuthorised.payerAuthorised == true && payerUpdateAuthorised.payeeAuthorised == true) {
+                payerAddress = _address;
+                emit PayerUpdateAuthorised(_address);
+            }
         } else {
+            bool payerAuthorised = msg.sender == payerAddress;
+            bool payeeAuthorised = msg.sender == payeeAddress;
+            payerUpdateAuthorised = Authorisation(payerAuthorised, payeeAuthorised, _address);
+
             emit PayerUpdateRequested(_address);
         }
 
         return true;
+    }
+
+    /**
+     * Returns Payee update
+     */
+    function getPendingPayeeUpdate() public view returns (bool, bool, address) {
+        Authorisation memory auth = payeeUpdateAuthorised;
+
+        return (auth.payerAuthorised, auth.payeeAuthorised, auth.toAddress);
     }
 
     /// Returns remaining balance in the payee wallet
@@ -341,11 +398,23 @@ contract PaymentIntervalContract {
 
     /// Removes the payer
     function removePayee(address _address) public payerOrPayee returns (bool) {
-        payeeRemoveAuthorised[_address][msg.sender] = true;
-        if (payeeRemoveAuthorised[_address][payerAddress] && payeeRemoveAuthorised[_address][payeeAddress]) {
-            payeeAddress = address(0);
-            emit PayeeRemoveAuthorised(_address);
+        if (payeeRemoveAuthorised.toAddress == _address) {
+            if (msg.sender == payerAddress) {
+                payeeRemoveAuthorised.payerAuthorised = true;
+            }
+            if (msg.sender == payeeAddress) {
+                payeeRemoveAuthorised.payeeAuthorised = true;
+            }
+
+            if (payeeRemoveAuthorised.payerAuthorised == true && payeeRemoveAuthorised.payeeAuthorised == true) {
+                payerAddress = address(0);
+                emit PayeeRemoveAuthorised(_address);
+            }
         } else {
+            bool payerAuthorised = msg.sender == payerAddress;
+            bool payeeAuthorised = msg.sender == payeeAddress;
+            payeeRemoveAuthorised = Authorisation(payerAuthorised, payeeAuthorised, _address);
+
             emit PayeeRemoveRequested(_address);
         }
 
@@ -358,11 +427,23 @@ contract PaymentIntervalContract {
      * @param _address Address of the new Payee
      */
     function requestPayeeUpdate(address _address) public payerOrPayee returns (bool) {
-        payeeUpdateAuthorised[_address][msg.sender] = true;
-        if (payeeUpdateAuthorised[_address][payerAddress] && payeeUpdateAuthorised[_address][payeeAddress]) {
-            payeeAddress = _address;
-            emit PayeeUpdateAuthorised(_address);
+        if (payeeUpdateAuthorised.toAddress == _address) {
+            if (msg.sender == payerAddress) {
+                payeeUpdateAuthorised.payerAuthorised = true;
+            }
+            if (msg.sender == payeeAddress) {
+                payeeUpdateAuthorised.payeeAuthorised = true;
+            }
+
+            if (payeeUpdateAuthorised.payerAuthorised == true && payeeUpdateAuthorised.payeeAuthorised == true) {
+                payerAddress = _address;
+                emit PayeeUpdateAuthorised(_address);
+            }
         } else {
+            bool payerAuthorised = msg.sender == payerAddress;
+            bool payeeAuthorised = msg.sender == payeeAddress;
+            payeeUpdateAuthorised = Authorisation(payerAuthorised, payeeAuthorised, _address);
+
             emit PayeeUpdateRequested(_address);
         }
 
@@ -378,11 +459,23 @@ contract PaymentIntervalContract {
      * @param _address Address of the new Usufruct
      */
     function requestUsufructUpdate(address _address) public payerOrPayee returns (bool) {
-        usufructUpdateAuthorised[_address][msg.sender] = true;
-        if (usufructUpdateAuthorised[_address][payerAddress] && usufructUpdateAuthorised[_address][payeeAddress]) {
-            usufructAddress = _address;
-            emit UsufructUpdateAuthorised(_address);
+        if (usufructUpdateAuthorised.toAddress == _address) {
+            if (msg.sender == payerAddress) {
+                usufructUpdateAuthorised.payerAuthorised = true;
+            }
+            if (msg.sender == payeeAddress) {
+                usufructUpdateAuthorised.payeeAuthorised = true;
+            }
+
+            if (usufructUpdateAuthorised.payerAuthorised == true && usufructUpdateAuthorised.payeeAuthorised == true) {
+                payerAddress = _address;
+                emit UsufructUpdateAuthorised(_address);
+            }
         } else {
+            bool payerAuthorised = msg.sender == payerAddress;
+            bool payeeAuthorised = msg.sender == payeeAddress;
+            usufructUpdateAuthorised = Authorisation(payerAuthorised, payeeAuthorised, _address);
+
             emit UsufructUpdateRequested(_address);
         }
 
@@ -395,11 +488,22 @@ contract PaymentIntervalContract {
      * @param _address Address of the Usufruct to be removed
      */
     function removeUsufruct(address _address) public payerOrPayee returns (bool) {
-        usufructRemoveAuthorised[_address][msg.sender] = true;
-        if (usufructRemoveAuthorised[_address][payerAddress] && usufructRemoveAuthorised[_address][payeeAddress]) {
-            usufructAddress = address(0);
-            emit UsufructRemoveAuthorised(_address);
+        if (usufructRemoveAuthorised.toAddress == _address) {
+            if (msg.sender == payerAddress) {
+                usufructRemoveAuthorised.payerAuthorised = true;
+            } else if (msg.sender == payeeAddress) {
+                usufructRemoveAuthorised.payeeAuthorised = true;
+            }
+
+            if (usufructRemoveAuthorised.payerAuthorised == true && usufructRemoveAuthorised.payeeAuthorised == true) {
+                payerAddress = address(0);
+                emit UsufructRemoveAuthorised(_address);
+            }
         } else {
+            bool payerAuthorised = msg.sender == payerAddress;
+            bool payeeAuthorised = msg.sender == payeeAddress;
+            usufructRemoveAuthorised = Authorisation(payerAuthorised, payeeAuthorised, _address);
+
             emit UsufructRemoveRequested(_address);
         }
 
@@ -430,6 +534,8 @@ contract PaymentIntervalContract {
      */
     function _transfer(address _to, uint _amount) internal {
         _to.transfer(_amount);
+
+        Transfer(msg.sender, _to, _amount);
     }
 
     /**
@@ -442,8 +548,12 @@ contract PaymentIntervalContract {
         view
         returns (uint)
     {
-        uint elapsed = _currentTime.sub(payeeWithdrawTime);
-        return paymentAmount.mul(elapsed).div(interval);
+        if (currentStage == ContractStages.Created) {
+            return 0;
+        } else {
+            uint elapsed = _currentTime.sub(payeeWithdrawTime);
+            return paymentAmount.mul(elapsed).div(interval);
+        }
     }
 
     function _getBlockTime()
