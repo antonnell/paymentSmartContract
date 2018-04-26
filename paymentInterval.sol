@@ -137,14 +137,35 @@ contract PaymentIntervalContract {
     (
         address _payerAddress,
         address _payeeAddress,
-        address _usufructAddress
+        address _usufructAddress,
+        string _contractType,
+        uint _paymentAmount,
+        uint _paymentInterval,
+        uint _payerBalance,
+        uint _payeeBalance
     )
     {
         _payerAddress = payerAddress;
         _payeeAddress = payeeAddress;
         _usufructAddress = usufructAddress;
+        _paymentAmount = paymentAmount;
+        _paymentInterval = interval;
+        _contractType = "Interval";
 
-        return (_payerAddress, _payeeAddress, _usufructAddress);
+        _payerBalance = payerBalance.sub(_calculateUnallocatedFunds(_getBlockTime()));
+        _payeeBalance = payerBalance.add(_calculateUnallocatedFunds(_getBlockTime()));
+
+        return
+        (
+            _payerAddress,
+            _payeeAddress,
+            _usufructAddress,
+            _contractType,
+            _paymentAmount,
+            _paymentInterval,
+            _payerBalance,
+            _payeeBalance
+        );
     }
 
     /**
@@ -522,7 +543,7 @@ contract PaymentIntervalContract {
     function _transfer(address _to, uint _amount) internal {
         _to.transfer(_amount);
 
-        Transfer(msg.sender, _to, _amount);
+        emit Transfer(msg.sender, _to, _amount);
     }
 
     /**
